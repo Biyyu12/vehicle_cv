@@ -2,6 +2,8 @@ import cv2
 import supervision as sv
 from ultralytics import YOLO
 import numpy as np
+import time 
+from collections import deque
 
 # Load YOLOv8
 model = YOLO("yolov8n.pt")
@@ -26,6 +28,11 @@ label_annotator = sv.LabelAnnotator()
 
 # Line position
 LINE_Y = 400
+
+# constants
+PIXEL_TO_METER = 0.05
+MIN_PIXEL_MOVE = 5
+WINDOW_SIZE = 5
 
 # counter
 count_in = 0
@@ -61,11 +68,16 @@ while cap.isOpened():
         x1, y1, x2, y2 = detections.xyxy[i]
         center_y = int((y1 + y2) / 2)
 
+        current_time = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+
         if track_id not in track_history:
             track_history[track_id] = {
                 "last_y": center_y,
-                "counted": False
+                "counted": False,
+                "positions": deque(maxlen=WINDOW_SIZE),
+                "speed": 0.0,
             }
+            track_history[track_id]["positions"].append((center_y, current_time))
             continue
 
         last_y = track_history[track_id]["last_y"]
@@ -84,10 +96,32 @@ while cap.isOpened():
 
         track_history[track_id]["last_y"] = center_y
 
+        # Speed calculation
+        track = track_history[track_id]
+        track["positions"].append((center_y, current_time))
+
+        if len(track["positions"]) >= 2:
+            y1, t1 = track["positions"][0]
+            y2, t2 = track["positions"][-1]
+
+            dy = abs(y2 - y1)
+            dt = t2 - t1
+
+            if dy > MIN_PIXEL_MOVE and dt > 0:
+                speed_m_per_s = (dy * PIXEL_TO_METER) / dt
+                current_speed = speed_m_per_s * 3.6
+                
+                if track["speed"] == 0.0:
+                    track["speed"] = current_speed
+                else:
+                    alpha = 0.2  
+                    track["speed"] = alpha * current_speed + (1 - alpha) * track["speed"]
+
+    # Draw line
     cv2.line(frame, (0, LINE_Y), (frame.shape[1], LINE_Y), (0, 0, 255), 2) 
 
     labels = [
-        f"ID {track_id}"
+        f"ID {track_id} | {track_history[track_id]['speed']:.1f} km/h"
         for track_id in detections.tracker_id
     ]
 
